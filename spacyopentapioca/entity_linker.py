@@ -9,7 +9,6 @@ from spacy.tokens import Doc, Span
 
 log = logging.getLogger(__name__)
 
-
 @Language.factory('opentapioca',
                   default_config={"url": "https://opentapioca.wordlift.io/api/annotate"})
 class EntityLinker(object):
@@ -30,11 +29,11 @@ class EntityLinker(object):
         Span.set_extension("extra_aliases", default=None, force=True)
         Span.set_extension("nb_sitelinks", default=None, force=True)
         Span.set_extension("nb_statements", default=None, force=True)
+        Span.set_extension("kb_url", default=None, force=True)
 
     def process_single_doc_after_call(self, doc: Doc, r) -> Doc:
         r.raise_for_status()
         data = r.json()
-
         # Attaches raw data to doc
         doc._.annotations = data.get('annotations')
         doc._.metadata = {"status_code": r.status_code, "reason": r.reason,
@@ -81,8 +80,28 @@ class EntityLinker(object):
         # Attach processed entities to doc.ents
         try:
             # this works with non-overlapping spans
-            doc.ents = list(doc.ents) + ents
-        except Exception:
+            # doc.ents = list(doc.ents) + ents
+            # print('LEN2', len(doc.ents))
+            entities = []
+            for ent in doc.ents:
+                linkedEntity = next((item for item in ents if item.text in ent.text), None)
+                if linkedEntity is not None:
+                    ent.kb_id_ = linkedEntity.kb_id_
+                    if len(linkedEntity.kb_id_) > 0:
+                        ent._.kb_url = "https://www.wikidata.org/entity/" + linkedEntity.kb_id_
+                    ent._.description = linkedEntity._.description
+                    ent._.score = linkedEntity._.score
+                    ent._.types = linkedEntity._.types
+                    ent._.aliases = linkedEntity._.aliases
+                    ent._.rank = linkedEntity._.rank
+                    ent._.annotations = linkedEntity._.annotations
+                    ent._.nb_sitelinks = linkedEntity._.nb_sitelinks
+                    ent._.nb_statements = linkedEntity._.nb_statements
+                    ent._.label = linkedEntity._.label
+                entities.append(ent)
+            doc.ents = list(entities)
+        except Exception as ex:
+            # log.error(ex)
             # filter the overlapping spans, keep the (first) longest one
             doc.ents = spacy.util.filter_spans(ents)
         # Attach all entities found by OpenTapioca to spans
@@ -99,7 +118,6 @@ class EntityLinker(object):
 
         # Post request to the OpenTapioca API
         r = self.make_request(doc)
-
         return self.process_single_doc_after_call(doc, r)
 
     def pipe(self, stream, batch_size=128):
